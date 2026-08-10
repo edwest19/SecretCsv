@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "SecretCsv (Package)": {
+      "commandName": "MsixPackage"
+    },
+    "SecretCsv (Unpackaged)": {
+      "commandName": "Project"
+    }
+  }
+}
