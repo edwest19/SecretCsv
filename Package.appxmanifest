@@ -8,16 +8,22 @@
   xmlns:systemai="http://schemas.microsoft.com/appx/manifest/systemai/windows10"
   IgnorableNamespaces="uap rescap systemai">
 
+  <!--
+    Publisher casing (S=ny vs S=NY) flagged by Claude (Sonnet 5),
+    2026-08-16, as a mismatch against the Azure Artifact Signing
+    certificate Subject (case-sensitive) - fixed by edwest19 to match
+    SecretArqc's working Subject exactly.
+  -->
   <Identity
     Name="7C58A044-D341-46CE-BD95-23D441D7B161"
-    Publisher="CN=AppPublisher"
+    Publisher="CN=Edwin West, O=Edwin West, L=Huntington, S=ny, C=US"
     Version="1.0.0.0" />
 
   <mp:PhoneIdentity PhoneProductId="7C58A044-D341-46CE-BD95-23D441D7B161" PhonePublisherId="00000000-0000-0000-0000-000000000000"/>
 
   <Properties>
     <DisplayName>SecretCsv</DisplayName>
-    <PublisherDisplayName>AppPublisher</PublisherDisplayName>
+    <PublisherDisplayName>Edwin West</PublisherDisplayName>
     <Logo>Assets\StoreLogo.png</Logo>
   </Properties>
 

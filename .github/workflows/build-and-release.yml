@@ -1,0 +1,193 @@
+# .github/workflows/build-and-release.yml
+#
+# Edited by Claude (Sonnet 5), 2026-08-16: this file was adapted from
+# SecretArqc's working build-and-release.yml, but three real bugs from
+# that adaptation were fixed here:
+#   1. PROJECT_PATH/MANIFEST_PATH pointed at a nested "SecretCsv/" folder
+#      and a SOLUTION_PATH of "SecretCsv.slnx" - neither exists. SecretCsv
+#      is a single flat project (dotnet new winui scaffold), not a
+#      multi-project solution like SecretArqc. Paths corrected to
+#      SecretCsv.csproj and Package.appxmanifest at the repo root, and the
+#      Restore step now targets PROJECT_PATH directly.
+#   2. Removed a "Check for test project" / "Run tests" step pair that
+#      referenced an undefined env var (TEST_PROJECT_PATH) - leftover from
+#      SecretArqc's Core.Tests logic. No test project exists in SecretCsv.
+#   3. Added a missing "Upload unsigned artifact" step to build-and-package.
+#      Without it, sign-and-release's "Download unsigned artifacts" step
+#      had nothing to download and the workflow would fail there every run.
+#
+# .github/workflows/build-and-release.yml
+#
+# Build -> Test -> Package (MSIX ) -> Sign (Azure
+# Artifact Signing) -> GitHub Release
+#
+# Written for a VS Code + CLI-only workflow end to end - including CI.
+# No Visual Studio, no msbuild.exe, no separately-installed Build Tools.
+# MSIX packaging uses the winapp CLI (https://github.com/microsoft/winappCli),
+# Microsoft's first-party CLI for MSIX identity/packaging, installed on
+# the runner via the official microsoft/setup-WinAppCli action. 
+#
+# Local-machine equivalents of what this file does (run from repo root):
+#   dotnet restore SecretCsv.csproj
+#   dotnet publish SecretCsv.csproj -c Release -r win-x64 --self-contained true -o publish/SecretCsv
+#   winapp pack publish/SecretCsv --manifest Package.appxmanifest --executable SecretCsv.exe --output SecretCsv.msix
+#
+# Run that sequence locally first and confirm the .msix output exists
+# before trusting this workflow in CI.
+#
+# REQUIRED REPO CONFIGURATION (Settings > Secrets and variables > Actions):
+#   Secrets:
+#     AZURE_CLIENT_ID        - App registration (federated credential) client ID
+#     AZURE_TENANT_ID        - Entra tenant ID
+#     AZURE_SUBSCRIPTION_ID  - Subscription containing the Artifact Signing account
+#   Variables:
+#     RUN_SIGNING            - 'true' or 'false'
+#
+# You must have already configured a federated credential on the Azure
+# app registration scoped to a GitHub Environment (not a branch/tag ref -
+# Azure federated credentials can't wildcard-match tags), subject:
+#   repo:<owner>/SecretCsv:environment:release
+# This avoids storing any client secret in GitHub at all. The GitHub
+# Environment named "release" must exist in this repo's Settings >
+# Environments, and the sign-and-release job below is scoped to it.
+#
+# NOTE ON SIGNING THE CLI EXES: unlike the MSIX, a plain .exe has no
+# manifest-identity/Publisher matching requirement - Authenticode signing
+# of a standalone executable is simpler than MSIX in that respect. Signing
+# them does NOT make Windows SmartScreen skip its warning on first
+# download (Microsoft removed "instant EV-style trust" in 2024 - even a
+# Public Trust cert has to build reputation through real download volume
+# like any other). The real reasons to sign them: Windows 11's Smart App
+# Control can block unsigned executables outright, and reputation can only
+# start building on a file that's consistently signed.
+#
+# NOTE ON PUBLISHER IDENTITY (MSIX only): the Publisher in
+# Package.appxmanifest must exactly match your Azure Artifact Signing
+# certificate profile's Subject (case-sensitive) or signing/updates will
+# break.
+
+name: Build, Sign, and Release SecretCsv
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      run_signing:
+        description: "Override RUN_SIGNING for this manual run (true/false)"
+        required: false
+        default: ""
+
+permissions:
+  id-token: write   # required for OIDC login to Azure (no stored client secret)
+  contents: write   # required to publish a GitHub Release
+
+env:
+  PROJECT_PATH: SecretCsv.csproj
+  MANIFEST_PATH: Package.appxmanifest
+  PUBLISH_DIR: publish/SecretCsv
+  PACKAGE_NAME: SecretCsv.msix
+  BUILD_PLATFORM: x64
+  BUILD_CONFIGURATION: Release
+
+jobs:
+  build-and-package:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      # Official Microsoft action - installs the winapp CLI used for
+      # MSIX packaging below. No VS/Build Tools install involved.
+      - name: Setup WinApp CLI
+        uses: microsoft/setup-WinAppCli@v0.1
+
+      - name: Restore
+        run: dotnet restore ${{ env.PROJECT_PATH }}
+
+      # --self-contained true: the WinUI3 template's Release config enables
+      # assembly trimming, which NETSDK1102 refuses to do for a
+      # framework-dependent publish. Self-contained is also the right
+      # choice here regardless, since users installing from GitHub
+      # Releases can't be assumed to have .NET 10 preinstalled.
+      - name: Publish SecretCsv app (self-contained, win-${{ env.BUILD_PLATFORM }})
+        run: >
+          dotnet publish ${{ env.PROJECT_PATH }}
+          -c ${{ env.BUILD_CONFIGURATION }}
+          -r win-${{ env.BUILD_PLATFORM }}
+          --self-contained true
+          -o ${{ env.PUBLISH_DIR }}
+
+      # --executable: WindowsAppSdkSelfContained bundles extra .exe files
+      # from the Windows App SDK runtime alongside the app's own, so
+      # winapp pack's auto-detection (exactly one .exe) is ambiguous now.
+      - name: Package MSIX (unsigned)
+        run: >
+          winapp pack ${{ env.PUBLISH_DIR }}
+          --manifest ${{ env.MANIFEST_PATH }}
+          --executable SecretCsv.exe
+          --output ${{ env.PACKAGE_NAME }}
+
+      - name: Verify MSIX package was created
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "${{ env.PACKAGE_NAME }}")) {
+            Write-Error "Package not found - check the 'Package MSIX' step output above."
+            exit 1
+          }
+
+      - name: Upload unsigned artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: unsigned-artifacts
+          path: ${{ env.PACKAGE_NAME }}
+
+  sign-and-release:
+    needs: build-and-package
+    runs-on: windows-latest
+    # Tied to a GitHub Environment (not a branch/tag ref) because Azure
+    # federated credentials cannot wildcard-match tag refs - each exact
+    # tag would otherwise need its own credential. The environment name
+    # is what the federated credential's Subject is scoped to in Azure,
+    # not "refs/heads/main" or any specific tag.
+    environment: release
+    if: ${{ (github.event.inputs.run_signing || vars.RUN_SIGNING) == 'true' }}
+    steps:
+      - name: Download unsigned artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: unsigned-artifacts
+
+      - name: Azure login (OIDC, no stored secret)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # files-folder-filter covers both the MSIX and the three CLI exes -
+      # they all sign in this one pass. See the header note on why the
+      # exes not showing "instant SmartScreen trust" is still expected.
+      - name: Sign with Azure Artifact Signing
+        uses: azure/trusted-signing-action@v1
+        with:
+          endpoint: https://eus.codesigning.azure.net
+          trusted-signing-account-name: edwest19
+          certificate-profile-name: CodeSigning-Apps
+          files-folder: ${{ github.workspace }}
+          files-folder-filter: msix,exe
+          files-folder-recurse: false
+
+      - name: Create GitHub Release with signed package
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            SecretCsv.msix
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
