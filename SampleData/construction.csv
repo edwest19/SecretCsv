@@ -1,0 +1,4 @@
+Category,Business Name,License ID,Last Name,First Name,Address,Phone,Email,Status,Date Issued,Date Expire,Website
+General Contractor,Sunrise Builders LLC,GC-000123,Rivera,Elena,"12 Example Ave, Anytown, NY 11801",6315551212,elena.rivera@example.com,Active,01-15-2024,2026-03-15,https://www.example.com
+Electrical;Plumbing,,EP-000456,Chen,Marcus,"48 Example Rd, Anytown, NY 11801",16315551313,marcus.chen@example.com,Active,3/1/2025,3/1/2027,
+Roofing,TopCoat Roofing,RF-000789,Patel,Raj,"9 Example Ln, Anytown, NY 11801",5551414,raj.patel@example.com,Pending,07/01/2026,07/01/2028,https://www.example.com/topcoat
